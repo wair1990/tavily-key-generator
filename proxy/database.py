@@ -7,6 +7,18 @@ from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "proxy.db")
 
+KEY_USAGE_COLUMNS = {
+    "usage_key_used": "INTEGER",
+    "usage_key_limit": "INTEGER",
+    "usage_key_remaining": "INTEGER",
+    "usage_account_plan": "TEXT DEFAULT ''",
+    "usage_account_used": "INTEGER",
+    "usage_account_limit": "INTEGER",
+    "usage_account_remaining": "INTEGER",
+    "usage_synced_at": "TEXT",
+    "usage_sync_error": "TEXT DEFAULT ''",
+}
+
 
 def get_conn():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -59,8 +71,21 @@ def init_db():
             value TEXT NOT NULL
         );
     """)
+    _ensure_usage_columns(conn)
     conn.commit()
     conn.close()
+
+
+def _table_columns(conn, table_name):
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def _ensure_usage_columns(conn):
+    existing = _table_columns(conn, "api_keys")
+    for name, definition in KEY_USAGE_COLUMNS.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE api_keys ADD COLUMN {name} {definition}")
 
 
 # ═══ Settings ═══
@@ -99,6 +124,14 @@ def get_all_keys():
     conn = get_conn()
     try:
         return conn.execute("SELECT * FROM api_keys ORDER BY id").fetchall()
+    finally:
+        conn.close()
+
+
+def get_key_by_id(key_id):
+    conn = get_conn()
+    try:
+        return conn.execute("SELECT * FROM api_keys WHERE id = ?", (key_id,)).fetchone()
     finally:
         conn.close()
 
@@ -169,6 +202,63 @@ def import_keys_from_text(text):
             add_key(key, email)
             count += 1
     return count
+
+
+def update_key_remote_usage(
+    key_id,
+    *,
+    key_used=None,
+    key_limit=None,
+    key_remaining=None,
+    account_plan="",
+    account_used=None,
+    account_limit=None,
+    account_remaining=None,
+    synced_at=None,
+):
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE api_keys
+            SET usage_key_used = ?,
+                usage_key_limit = ?,
+                usage_key_remaining = ?,
+                usage_account_plan = ?,
+                usage_account_used = ?,
+                usage_account_limit = ?,
+                usage_account_remaining = ?,
+                usage_synced_at = ?,
+                usage_sync_error = ''
+            WHERE id = ?
+            """,
+            (
+                key_used,
+                key_limit,
+                key_remaining,
+                account_plan or "",
+                account_used,
+                account_limit,
+                account_remaining,
+                synced_at or datetime.now(timezone.utc).isoformat(),
+                key_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_key_remote_usage_error(key_id, error_message):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE api_keys SET usage_sync_error = ? WHERE id = ?",
+            ((error_message or "").strip(), key_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ═══ Tokens ═══

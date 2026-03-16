@@ -105,7 +105,11 @@ textarea { min-height: 80px; resize: vertical; }
   <!-- Overview -->
   <div class="card">
     <h2>用量概览</h2>
-    <p class="desc">账户级成功率、失败量与总余额</p>
+    <p class="desc">真实额度来自 Tavily 官方 /usage 接口，代理统计来自本地 usage log</p>
+    <div class="flex mt" style="margin-bottom:12px;justify-content:space-between;flex-wrap:wrap">
+      <div id="usage-sync-meta" style="font-size:12px;color:#666"></div>
+      <button class="btn" id="sync-usage-btn" onclick="syncUsage(true)">同步 Tavily 额度</button>
+    </div>
     <div class="stats-grid" id="overview-stats"></div>
   </div>
 
@@ -150,7 +154,7 @@ textarea { min-height: 80px; resize: vertical; }
       <button class="btn btn-primary mt" onclick="importKeys()">导入</button>
     </div>
     <div style="overflow-x:auto">
-      <table id="keys-table"><thead><tr><th>ID</th><th>Key</th><th>邮箱</th><th>成功</th><th>失败</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
+      <table id="keys-table"><thead><tr><th>ID</th><th>Key</th><th>邮箱</th><th>真实额度</th><th>账户计划</th><th>代理统计</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
     </div>
   </div>
 
@@ -212,23 +216,97 @@ function quotaBar(used, limit) {
   return `<div class="quota-bar"><div class="quota-bar-fill ${cls}" style="width:${pct}%"></div></div>`;
 }
 
+function fmtNum(value) {
+  if (value === null || value === undefined || value === '') return '--';
+  return Number(value).toLocaleString();
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function formatTime(iso) {
+  if (!iso) return '未同步';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '未同步';
+  return d.toLocaleString();
+}
+
+function renderKeyQuota(key) {
+  if (key.usage_key_limit !== null && key.usage_key_used !== null) {
+    const remain = key.usage_key_remaining ?? Math.max(0, key.usage_key_limit - key.usage_key_used);
+    let html = `
+      <div>已用 ${fmtNum(key.usage_key_used)} / ${fmtNum(key.usage_key_limit)}</div>
+      <div><b style="color:${remain > 0 ? '#1a8a1a' : '#e74c3c'}">剩余 ${fmtNum(remain)}</b></div>
+      ${quotaBar(key.usage_key_used || 0, key.usage_key_limit || 0)}
+      <div style="font-size:11px;color:#888;margin-top:4px">同步 ${formatTime(key.usage_synced_at)}</div>
+    `;
+    if (key.usage_sync_error) {
+      html += `<div style="font-size:11px;color:#e67e22;margin-top:4px">最近错误: ${escapeHtml(key.usage_sync_error)}</div>`;
+    }
+    return html;
+  }
+  if (key.usage_key_used !== null && key.usage_account_limit !== null) {
+    let html = `
+      <div>已用 ${fmtNum(key.usage_key_used)}</div>
+      <div><b style="color:#1a1a6e">单 Key 未设独立上限</b></div>
+      <div style="font-size:11px;color:#888;margin-top:4px">额度跟随账户计划</div>
+      <div style="font-size:11px;color:#888;margin-top:4px">同步 ${formatTime(key.usage_synced_at)}</div>
+    `;
+    if (key.usage_sync_error) {
+      html += `<div style="font-size:11px;color:#e67e22;margin-top:4px">最近错误: ${escapeHtml(key.usage_sync_error)}</div>`;
+    }
+    return html;
+  }
+  if (key.usage_sync_error) {
+    return `<span style="color:#e67e22">同步失败</span><div style="font-size:11px;color:#888;margin-top:4px">${escapeHtml(key.usage_sync_error)}</div>`;
+  }
+  return '<span style="color:#888">未同步</span>';
+}
+
+function renderAccountQuota(key) {
+  if (key.usage_account_limit !== null && key.usage_account_used !== null) {
+    const remain = key.usage_account_remaining ?? Math.max(0, key.usage_account_limit - key.usage_account_used);
+    const plan = key.usage_account_plan ? escapeHtml(key.usage_account_plan) : '未知计划';
+    return `
+      <div>${plan}</div>
+      <div>已用 ${fmtNum(key.usage_account_used)} / ${fmtNum(key.usage_account_limit)}</div>
+      <div><b style="color:${remain > 0 ? '#1a8a1a' : '#e74c3c'}">剩余 ${fmtNum(remain)}</b></div>
+      ${quotaBar(key.usage_account_used || 0, key.usage_account_limit || 0)}
+    `;
+  }
+  return '<span style="color:#888">未返回</span>';
+}
+
 async function refresh() {
   const stats = await api('GET', '/api/stats');
   const o = stats.overview;
-
-  // 每个 Tavily 免费 key 月限额 1000 次
-  const KEY_MONTHLY_QUOTA = 1000;
-  const totalQuota = stats.keys_active * KEY_MONTHLY_QUOTA;
-  const monthUsed = o.month_count;
-  const monthRemain = Math.max(0, totalQuota - monthUsed);
-  const usedPct = totalQuota ? Math.min(100, (monthUsed / totalQuota) * 100) : 0;
+  const rq = stats.real_quota || {};
+  const totalQuota = rq.total_limit || 0;
+  const totalUsed = rq.total_used || 0;
+  const totalRemain = rq.total_remaining || 0;
+  const usedPct = totalQuota ? Math.min(100, (totalUsed / totalQuota) * 100) : 0;
   const remainCls = usedPct >= 90 ? 'color:#e74c3c' : usedPct >= 70 ? 'color:#f39c12' : 'color:#1a8a1a';
+  const syncMeta = [];
+  syncMeta.push(`已同步 ${rq.synced_keys || 0}/${rq.total_keys || 0} 个 key`);
+  if ((rq.key_level_count || 0) > 0) syncMeta.push(`独立 Key 限额 ${rq.key_level_count} 个`);
+  if ((rq.account_fallback_count || 0) > 0) syncMeta.push(`账户计划回退 ${rq.account_fallback_count} 组`);
+  if (rq.last_synced_at) syncMeta.push(`最近同步 ${formatTime(rq.last_synced_at)}`);
+  if ((rq.error_keys || 0) > 0) syncMeta.push(`${rq.error_keys} 个 key 同步失败`);
+  document.getElementById('usage-sync-meta').textContent = syncMeta.join(' · ');
 
   document.getElementById('overview-stats').innerHTML = `
-    <div class="stat-box"><div class="label">本月总额度</div><div class="value">${totalQuota.toLocaleString()}</div><div class="remain">Key ${stats.keys_active} × ${KEY_MONTHLY_QUOTA}</div></div>
-    <div class="stat-box"><div class="label">已用次数</div><div class="value">${monthUsed}</div><div class="remain">成功 ${o.month_success} / 失败 ${monthUsed - o.month_success}</div></div>
-    <div class="stat-box"><div class="label">剩余次数</div><div class="value" style="${remainCls}">${monthRemain.toLocaleString()}</div>${quotaBar(monthUsed, totalQuota)}</div>
+    <div class="stat-box"><div class="label">真实总额度</div><div class="value">${fmtNum(totalQuota)}</div><div class="remain">来自 Tavily /usage</div></div>
+    <div class="stat-box"><div class="label">真实已用</div><div class="value">${fmtNum(totalUsed)}</div><div class="remain">按已同步 key 汇总</div></div>
+    <div class="stat-box"><div class="label">真实剩余</div><div class="value" style="${remainCls}">${fmtNum(totalRemain)}</div>${quotaBar(totalUsed, totalQuota)}</div>
+    <div class="stat-box"><div class="label">已同步 Key</div><div class="value">${fmtNum(rq.synced_keys || 0)} <span>/ ${fmtNum(rq.total_keys || 0)}</span></div><div class="remain">${(rq.error_keys || 0) > 0 ? `失败 ${rq.error_keys}` : '全部正常'}</div></div>
     <div class="stat-box"><div class="label">今日用量</div><div class="value">${o.today_count}</div><div class="remain">成功 ${o.today_success} / 失败 ${o.today_failed}</div></div>
+    <div class="stat-box"><div class="label">本月代理用量</div><div class="value">${o.month_count}</div><div class="remain">成功 ${o.month_success} / 失败 ${o.month_count - o.month_success}</div></div>
     <div class="stat-box"><div class="label">Key 池</div><div class="value">${stats.keys_active} <span>/ ${stats.keys_total}</span></div></div>
     <div class="stat-box"><div class="label">Token 数</div><div class="value">${stats.tokens.length}</div></div>
   `;
@@ -298,8 +376,9 @@ curl -X POST <span class="string">${baseUrl}/api/search</span> \\
       <td>${k.id}</td>
       <td class="mono">${k.key_masked}</td>
       <td style="font-size:12px">${k.email||'-'}</td>
-      <td>${k.total_used}</td>
-      <td>${k.total_failed}</td>
+      <td style="font-size:12px;line-height:1.8">${renderKeyQuota(k)}</td>
+      <td style="font-size:12px;line-height:1.8">${renderAccountQuota(k)}</td>
+      <td style="font-size:12px;line-height:1.8">成功 ${k.total_used}<br>失败 ${k.total_failed}</td>
       <td><span class="tag ${active?'tag-ok':'tag-off'}">${active?'正常':'禁用'}</span></td>
       <td>
         <button class="btn btn-sm" onclick="toggleKey(${k.id},${active?0:1})">${active?'禁用':'启用'}</button>
@@ -338,6 +417,22 @@ async function importKeys() {
 
 async function delKey(id) { if(confirm('确认删除？')){ await api('DELETE', `/api/keys/${id}`); refresh(); } }
 async function toggleKey(id, active) { await api('PUT', `/api/keys/${id}/toggle`, { active }); refresh(); }
+
+async function syncUsage(force) {
+  const btn = document.getElementById('sync-usage-btn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '同步中...';
+  try {
+    await api('POST', '/api/usage/sync', { force });
+    await refresh();
+  } catch (e) {
+    alert('同步 Tavily 额度失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
 
 async function changePwd() {
   const newPwd = document.getElementById('new-pwd').value.trim();

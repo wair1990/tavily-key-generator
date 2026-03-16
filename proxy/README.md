@@ -6,7 +6,8 @@
 
 - **Key 池化轮询**：Round-robin 分配请求到多个 API Key，连续失败 3 次自动禁用
 - **Token 管理**：创建多个访问 Token，每个 Token 独立配额（小时/日/月）
-- **用量统计**：实时查看成功/失败次数、延迟、配额使用情况
+- **真实额度同步**：后台通过 Tavily 官方 `/usage` 接口同步每个 Key 的真实已用 / 总额度 / 剩余额度
+- **用量统计**：同时保留代理侧成功/失败次数、延迟和 Token 配额使用情况
 - **Web 控制台**：可视化管理 Key、Token 和用量
 - **批量导入**：支持从 `api_keys.md` 格式文本批量导入 Key
 - **兼容 Tavily 官方 API**：客户端只需改 base URL 即可
@@ -78,6 +79,7 @@ curl -X POST http://localhost:9874/api/search \
 | GET | `/` | Web 管理控制台 |
 | GET | `/api/stats` | 用量统计概览 |
 | GET | `/api/keys` | 列出所有 Key（脱敏显示） |
+| POST | `/api/usage/sync` | 手动同步 Tavily 官方真实额度 |
 | POST | `/api/keys` | 添加 Key：`{"key":"tvly-xxx"}` 或批量 `{"file":"文本内容"}` |
 | DELETE | `/api/keys/{id}` | 删除 Key |
 | PUT | `/api/keys/{id}/toggle` | 启用/禁用 Key：`{"active": 1}` |
@@ -90,6 +92,8 @@ curl -X POST http://localhost:9874/api/search \
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `ADMIN_PASSWORD` | `admin` | 管理控制台和管理 API 的密码 |
+| `USAGE_SYNC_TTL_SECONDS` | `300` | Tavily 真实额度缓存秒数，超过后控制台会自动重新同步 |
+| `USAGE_SYNC_CONCURRENCY` | `4` | 后台并发同步 `/usage` 的最大 Key 数 |
 
 ## Token 配额
 
