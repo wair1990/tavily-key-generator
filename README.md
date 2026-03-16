@@ -1,4 +1,4 @@
-# Tavily Key Register - Rebuilt Edition
+# Tavily Key Generator - Rebuilt Edition
 
 完全重构版 Tavily 自动注册工具。
 
@@ -29,8 +29,8 @@
 ### 1. Clone
 
 ```bash
-git clone <your-repo-url>
-cd tavily-key-regedit
+git clone https://github.com/skernelx/tavily-key-generator.git
+cd tavily-key-generator
 ```
 
 ### 2. Configure
