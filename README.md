@@ -4,7 +4,7 @@
 
 这是一个多服务注册器与聚合 API 上游工具，聚焦三件事：
 
-- 注册 `Tavily` / `Firecrawl` / `Exa` key
+- 注册 `～Tavily～` / `Firecrawl` / `Exa` key
 - 验证 key 是否真实可用，并把可用 key 提供给统一搜索层
 
 ## 当前状态
