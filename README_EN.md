@@ -104,8 +104,8 @@ This repository stays focused on:
 - verifying them with live requests
 - serving as the upstream aggregation source
 
-The local `proxy/` directory is now kept only for legacy deployments or
-migration scenarios, not as the primary recommended path.
+The local `proxy/` directory now keeps only a migration README and no longer
+ships the runnable implementation.
 
 ## Relationship to MySearch
 
