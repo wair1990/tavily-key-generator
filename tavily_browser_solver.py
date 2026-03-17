@@ -310,13 +310,9 @@ def refresh_password_page_if_needed(page, feedback, state):
     if "couldn't load the security challenge" not in lowered:
         return False
 
-    if any(
-        (
-            state.get("hasCaptchaDiv"),
-            state.get("hasChallengeIframe"),
-            state.get("hasTurnstile"),
-        )
-    ):
+    # 新版 Auth0 页面经常会先渲染占位 captcha div / hidden input，
+    # 但真正的 Cloudflare iframe 还没挂起来；这种情况也需要刷新。
+    if state.get("hasChallengeIframe") or state.get("hasTurnstile"):
         return False
 
     print("🔄 检测到安全挑战加载失败，刷新密码页后重试...")
@@ -328,6 +324,40 @@ def refresh_password_page_if_needed(page, feedback, state):
     except Exception as exc:
         print(f"⚠️  刷新密码页失败: {exc}")
         return False
+
+
+def wait_for_password_challenge_ready(page, timeout=8):
+    """等待密码页的 Cloudflare challenge 尽量挂起。"""
+    deadline = time.time() + timeout
+    latest_state = {}
+    while time.time() < deadline:
+        latest_state = collect_turnstile_state(page)
+        if latest_state.get("hasChallengeIframe") or latest_state.get("hasTurnstile"):
+            return latest_state
+        time.sleep(0.5)
+    return latest_state
+
+
+def ensure_password_challenge_ready(page):
+    """密码页刚出现时先给 challenge 一个渲染窗口，必要时主动刷新一次。"""
+    state = wait_for_password_challenge_ready(page, timeout=6)
+    if not state.get("hasPasswordInput"):
+        return state
+
+    if state.get("hasChallengeIframe") or state.get("hasTurnstile"):
+        return state
+
+    if state.get("hasCaptchaDiv") or state.get("hasCaptchaInput"):
+        print("🔄 密码页 challenge 未完全渲染，先刷新一次页面...")
+        try:
+            page.reload(wait_until="networkidle", timeout=30000)
+            page.wait_for_selector('input[name="password"]', timeout=15000)
+            time.sleep(2)
+            state = wait_for_password_challenge_ready(page, timeout=6)
+        except Exception as exc:
+            print(f"⚠️  密码页预刷新失败: {exc}")
+
+    return state
 
 def recover_password_challenge(page, password, max_attempts=3):
     """密码页未跳转时，尝试等待 challenge 渲染并恢复提交流程。"""
@@ -387,6 +417,10 @@ def recover_password_challenge(page, password, max_attempts=3):
 
 def submit_password_with_recovery(page, password):
     """提交密码，并在随机 challenge 场景下自动恢复。"""
+    initial_state = ensure_password_challenge_ready(page)
+    if initial_state:
+        print(f"🔍 密码页 challenge 状态: {format_turnstile_state(initial_state)}")
+
     if not refill_password(page, password):
         return False
 
